@@ -193,7 +193,13 @@ class FlowCheckPointXblock(StudioEditableXBlockMixin, XBlock):
         """
         # pylint: disable=no-member
         items = get_modulestore().get_items(self.course_id, qualifiers={'name': block_id})
-        return items[0].location if items else None
+        if not items:
+            LOGGER.warning(
+                "flow-control: no block found for id '%s' in course '%s'; "
+                "check the block id configured in Studio",
+                block_id, self.course_id)
+            return None
+        return items[0].location
 
     def get_condition_status(self):
         """  Returns the current condition status  """
