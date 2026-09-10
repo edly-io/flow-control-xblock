@@ -172,7 +172,25 @@ class FlowCheckPointXblock(StudioEditableXBlockMixin, XBlock):
                        'message')
 
     def get_usage_key_for_block_id(self, block_id):
-        """  Returns the usage key for a block given its bare id, regardless of its type  """
+        """
+        Resolve a bare block id (e.g. "618c5933b8b544e4a4cc103d3e508378",
+        as entered in the "Problem id"/"List of problems" Studio fields)
+        into a full usage key (e.g.
+        "block-v1:org+course+run+type@openassessment+block@618c...").
+
+        The lookup is done via the modulestore instead of building the
+        usage key string manually, so it works regardless of the block's
+        category (``problem``, ``openassessment``, etc). Previously this
+        assumed every id belonged to a ``problem`` block, which meant ORA
+        (Open Response Assessment) ids could never be resolved.
+
+        Args:
+            block_id (str): the bare 32-char alphanumeric block id.
+
+        Returns:
+            UsageKey or None: the usage key for the first block found with
+            that id, or None if no block in the course matches it.
+        """
         # pylint: disable=no-member
         items = get_modulestore().get_items(self.course_id, qualifiers={'name': block_id})
         return items[0].location if items else None
@@ -301,7 +319,27 @@ class FlowCheckPointXblock(StudioEditableXBlockMixin, XBlock):
     }
 
     def condition_on_problem_list(self, problems):
-        """ Returns the score for a list of problems """
+        """
+        Evaluate this block's condition (operator + ref_value) against the
+        scores of a list of problems (a single problem, for the
+        "single_problem" condition, or several, for "average_problems").
+
+        Each bare problem id is resolved to a usage key via
+        get_usage_key_for_block_id (type-agnostic: works for capa
+        ``problem`` blocks and ORA ``openassessment`` blocks alike), then
+        scores for all resolved usage keys are fetched in one call via the
+        active ScoresClient backend (Grades-API-backed, see
+        edxapp_wrapper/backends/score_s_v1.py), which correctly reports
+        None for a block the student has not attempted yet -- as opposed
+        to a block that was attempted and scored 0.
+
+        Args:
+            problems (list[str]): bare block ids to evaluate.
+
+        Returns:
+            bool: whether the condition (operator/ref_value, or one of the
+            null-check operators) is satisfied by the resulting scores.
+        """
         # pylint: disable=no-member
         user_id = self.xmodule_runtime.user_id
         scores_client = ScoresClient(self.course_id, user_id)
@@ -311,6 +349,7 @@ class FlowCheckPointXblock(StudioEditableXBlockMixin, XBlock):
         correct = 0
 
         def _get_usage_key(problem):
+            """Resolve a bare problem id to its usage key (or None)."""
             return self.get_usage_key_for_block_id(problem)
 
         def _to_reducible(score):
