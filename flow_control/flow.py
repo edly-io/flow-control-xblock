@@ -15,9 +15,9 @@ from xblock.validation import ValidationMessage
 from flow_control.edxapp_wrapper.score import (
     score_module as ScoresClient,
 )
-
-from opaque_keys.edx.keys import UsageKey
-from opaque_keys import InvalidKeyError
+from flow_control.edxapp_wrapper.modulestore import (
+    modulestore_module as get_modulestore,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -171,32 +171,11 @@ class FlowCheckPointXblock(StudioEditableXBlockMixin, XBlock):
                        'target_id',
                        'message')
 
-    def get_location_string(self, locator, is_draft=False):
-        """  Returns the location string for one problem, given its id  """
+    def get_usage_key_for_block_id(self, block_id):
+        """  Returns the usage key for a block given its bare id, regardless of its type  """
         # pylint: disable=no-member
-        course_prefix = 'course'
-        resource = 'problem'
-        course_url = str(self.course_id)
-
-        if is_draft:
-            course_url = course_url.split(self.course_id.run)[0]
-            prefix = 'i4x://'
-            location_string = '{prefix}{couse_str}{type_id}/{locator}'.format(
-                prefix=prefix,
-                couse_str=course_url,
-                type_id=resource,
-                locator=locator)
-        else:
-            course_url = course_url.replace(course_prefix, '', 1)
-
-            location_string = '{prefix}{course_str}+{type}@{type_id}+{prefix}@{locator}'.format(
-                prefix=self.course_id.BLOCK_PREFIX,
-                course_str=course_url,
-                type=self.course_id.BLOCK_TYPE_PREFIX,
-                type_id=resource,
-                locator=locator)
-
-        return location_string
+        items = get_modulestore().get_items(self.course_id, qualifiers={'name': block_id})
+        return items[0].location if items else None
 
     def get_condition_status(self):
         """  Returns the current condition status  """
@@ -332,24 +311,7 @@ class FlowCheckPointXblock(StudioEditableXBlockMixin, XBlock):
         correct = 0
 
         def _get_usage_key(problem):
-
-            loc = self.get_location_string(problem)
-            try:
-                uk = UsageKey.from_string(loc)
-            except InvalidKeyError:
-                uk = _get_draft_usage_key(problem)
-            return uk
-
-        def _get_draft_usage_key(problem):
-
-            loc = self.get_location_string(problem, True)
-            try:
-                uk = UsageKey.from_string(loc)
-                uk = uk.map_into_course(self.course_id)
-            except InvalidKeyError:
-                uk = None
-
-            return uk
+            return self.get_usage_key_for_block_id(problem)
 
         def _to_reducible(score):
             correct_default = 0.0
@@ -368,6 +330,7 @@ class FlowCheckPointXblock(StudioEditableXBlockMixin, XBlock):
             return {'total': total}
 
         usages_keys = list(map(_get_usage_key, problems))
+        usages_keys = list(filter(None, usages_keys))
         scores_client.fetch_scores(usages_keys)
         scores = map(scores_client.get, usages_keys)
         scores = list(filter(None, scores))

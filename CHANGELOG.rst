@@ -14,6 +14,19 @@ Unreleased
 
 *
 
+[2.2.1]
+~~~~~~~
+
+Fixed
+_____
+
+* Fix condition evaluation for Open Response Assessment (ORA) blocks: the
+  block-id-to-usage-key lookup assumed every referenced problem was a capa
+  ``problem`` block, so ORA blocks could never be matched. Scores are now
+  also read from the Grades subsystem instead of the legacy
+  ``courseware_studentmodule`` table, since ORA no longer publishes scores
+  there.
+
 2.2.0 - 2025-10-14
 **********************************************
 
