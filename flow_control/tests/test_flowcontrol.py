@@ -93,41 +93,42 @@ class TestBuilderBlocks(unittest.TestCase):
             result = load(path_mock)
             self.assertEqual(result, mock_content)
 
-    @ddt.data(
-        'course-v1:Course+course+course',
-        'test:Test+test+test',
-        'course:Test+course+course'
-    )
-    def test_get_location_string(self, course_string):
+    @patch('flow_control.flow.get_modulestore')
+    def test_get_usage_key_for_block_id(self, get_modulestore_mock):
         """
-        It should return the problem location string given its Id
+        It should return the usage key for a block given its bare id,
+        regardless of the block's category (e.g. problem, openassessment).
         """
 
         # prepare
-        resource = 'problem'
-        locator = 'hbdf3883be0935'
-        course_prefix = 'course'
-
+        block_id = 'hbdf3883be0935'
         self.block.course_id = MagicMock()
-        self.block.course_id.BLOCK_PREFIX = 'block-v1'
-        self.block.course_id.BLOCK_TYPE_PREFIX = 'type'
-        self.block.course_id.__str__.return_value = course_string
+        found_item = MagicMock()
+        get_modulestore_mock.return_value.get_items.return_value = [found_item]
 
-        course_replaced_url = course_string.replace(course_prefix, '', 1)
         # execute code
-        result_string = self.block.get_location_string(locator)
+        result = self.block.get_usage_key_for_block_id(block_id)
 
         # asserts
-        testing_string = '{prefix}{course_str}+{type}@{type_id}+{prefix}@{locator}'.format(
-            prefix=self.block.course_id.BLOCK_PREFIX,
-            course_str=course_replaced_url,
-            type=self.block.course_id.BLOCK_TYPE_PREFIX,
-            type_id=resource,
-            locator=locator,
-        )
+        get_modulestore_mock.return_value.get_items.assert_called_with(
+            self.block.course_id, qualifiers={'name': block_id})
+        self.assertEqual(found_item.location, result)
 
-        self.assertEqual(testing_string, result_string)
-        self.block.course_id.__str__.assert_called_with()
+    @patch('flow_control.flow.get_modulestore')
+    def test_get_usage_key_for_block_id_not_found(self, get_modulestore_mock):
+        """
+        It should return None when no block matches the given id.
+        """
+
+        # prepare
+        self.block.course_id = MagicMock()
+        get_modulestore_mock.return_value.get_items.return_value = []
+
+        # execute code
+        result = self.block.get_usage_key_for_block_id('missing-id')
+
+        # asserts
+        self.assertIsNone(result)
 
     def test_get_condition_status(self):
         """
@@ -136,7 +137,6 @@ class TestBuilderBlocks(unittest.TestCase):
 
         # prepare
         self.block.condition = 'single_problem'
-        self.block.get_location_string = MagicMock()
         self.block.condition_on_problem_list = MagicMock()
         self.block.problem_id = '    ndsjkjhgs78768346  '
         self.block.list_of_problems = 'ndsjkjhg8768346fd  njhgs78ikdgshuhg46  '

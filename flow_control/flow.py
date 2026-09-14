@@ -15,9 +15,9 @@ from xblock.validation import ValidationMessage
 from flow_control.edxapp_wrapper.score import (
     score_module as ScoresClient,
 )
-
-from opaque_keys.edx.keys import UsageKey
-from opaque_keys import InvalidKeyError
+from flow_control.edxapp_wrapper.modulestore import (
+    modulestore_module as get_modulestore,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -171,32 +171,35 @@ class FlowCheckPointXblock(StudioEditableXBlockMixin, XBlock):
                        'target_id',
                        'message')
 
-    def get_location_string(self, locator, is_draft=False):
-        """  Returns the location string for one problem, given its id  """
+    def get_usage_key_for_block_id(self, block_id):
+        """
+        Resolve a bare block id (e.g. "618c5933b8b544e4a4cc103d3e508378",
+        as entered in the "Problem id"/"List of problems" Studio fields)
+        into a full usage key (e.g.
+        "block-v1:org+course+run+type@openassessment+block@618c...").
+
+        The lookup is done via the modulestore instead of building the
+        usage key string manually, so it works regardless of the block's
+        category (``problem``, ``openassessment``, etc). Previously this
+        assumed every id belonged to a ``problem`` block, which meant ORA
+        (Open Response Assessment) ids could never be resolved.
+
+        Args:
+            block_id (str): the bare 32-char alphanumeric block id.
+
+        Returns:
+            UsageKey or None: the usage key for the first block found with
+            that id, or None if no block in the course matches it.
+        """
         # pylint: disable=no-member
-        course_prefix = 'course'
-        resource = 'problem'
-        course_url = str(self.course_id)
-
-        if is_draft:
-            course_url = course_url.split(self.course_id.run)[0]
-            prefix = 'i4x://'
-            location_string = '{prefix}{couse_str}{type_id}/{locator}'.format(
-                prefix=prefix,
-                couse_str=course_url,
-                type_id=resource,
-                locator=locator)
-        else:
-            course_url = course_url.replace(course_prefix, '', 1)
-
-            location_string = '{prefix}{course_str}+{type}@{type_id}+{prefix}@{locator}'.format(
-                prefix=self.course_id.BLOCK_PREFIX,
-                course_str=course_url,
-                type=self.course_id.BLOCK_TYPE_PREFIX,
-                type_id=resource,
-                locator=locator)
-
-        return location_string
+        items = get_modulestore().get_items(self.course_id, qualifiers={'name': block_id})
+        if not items:
+            LOGGER.warning(
+                "flow-control: no block found for id '%s' in course '%s'; "
+                "check the block id configured in Studio",
+                block_id, self.course_id)
+            return None
+        return items[0].location
 
     def get_condition_status(self):
         """  Returns the current condition status  """
@@ -322,7 +325,27 @@ class FlowCheckPointXblock(StudioEditableXBlockMixin, XBlock):
     }
 
     def condition_on_problem_list(self, problems):
-        """ Returns the score for a list of problems """
+        """
+        Evaluate this block's condition (operator + ref_value) against the
+        scores of a list of problems (a single problem, for the
+        "single_problem" condition, or several, for "average_problems").
+
+        Each bare problem id is resolved to a usage key via
+        get_usage_key_for_block_id (type-agnostic: works for capa
+        ``problem`` blocks and ORA ``openassessment`` blocks alike), then
+        scores for all resolved usage keys are fetched in one call via the
+        active ScoresClient backend (Grades-API-backed, see
+        edxapp_wrapper/backends/score_s_v1.py), which correctly reports
+        None for a block the student has not attempted yet -- as opposed
+        to a block that was attempted and scored 0.
+
+        Args:
+            problems (list[str]): bare block ids to evaluate.
+
+        Returns:
+            bool: whether the condition (operator/ref_value, or one of the
+            null-check operators) is satisfied by the resulting scores.
+        """
         # pylint: disable=no-member
         user_id = self.xmodule_runtime.user_id
         scores_client = ScoresClient(self.course_id, user_id)
@@ -332,24 +355,8 @@ class FlowCheckPointXblock(StudioEditableXBlockMixin, XBlock):
         correct = 0
 
         def _get_usage_key(problem):
-
-            loc = self.get_location_string(problem)
-            try:
-                uk = UsageKey.from_string(loc)
-            except InvalidKeyError:
-                uk = _get_draft_usage_key(problem)
-            return uk
-
-        def _get_draft_usage_key(problem):
-
-            loc = self.get_location_string(problem, True)
-            try:
-                uk = UsageKey.from_string(loc)
-                uk = uk.map_into_course(self.course_id)
-            except InvalidKeyError:
-                uk = None
-
-            return uk
+            """Resolve a bare problem id to its usage key (or None)."""
+            return self.get_usage_key_for_block_id(problem)
 
         def _to_reducible(score):
             correct_default = 0.0
@@ -368,6 +375,7 @@ class FlowCheckPointXblock(StudioEditableXBlockMixin, XBlock):
             return {'total': total}
 
         usages_keys = list(map(_get_usage_key, problems))
+        usages_keys = list(filter(None, usages_keys))
         scores_client.fetch_scores(usages_keys)
         scores = map(scores_client.get, usages_keys)
         scores = list(filter(None, scores))
